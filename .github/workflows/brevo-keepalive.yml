@@ -1,0 +1,67 @@
+name: Brevo SMTP keepalive
+
+# Brevo expires SMTP keys after 90 days of inactivity. This sends one
+# harmless email a month through the relay so the key (used by Gmail's
+# "Send mail as") never goes stale. See docs/en/04-fix-dkim-alignment.md.
+#
+# The heartbeat commit also keeps a public repository active so GitHub
+# does not disable this scheduled workflow after 60 days of inactivity.
+
+on:
+  schedule:
+    # 06:00 UTC on the 1st of every month.
+    - cron: "0 6 1 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Update repository heartbeat
+        run: |
+          set -euo pipefail
+
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > .github/heartbeat.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .github/heartbeat.txt
+          git commit -m "chore: update scheduled workflow heartbeat"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Send keepalive email via Brevo SMTP
+        env:
+          # Only the SMTP key is sensitive; login/from/to are plain repo
+          # variables (Settings > Secrets and variables > Actions > Variables)
+          # so they're easy to see/edit without re-entering a secret.
+          BREVO_SMTP_LOGIN: ${{ vars.BREVO_SMTP_LOGIN }}
+          BREVO_SMTP_KEY: ${{ secrets.BREVO_SMTP_KEY }}
+          BREVO_KEEPALIVE_FROM: ${{ vars.BREVO_KEEPALIVE_FROM }}
+          BREVO_KEEPALIVE_TO: ${{ vars.BREVO_KEEPALIVE_TO }}
+        run: |
+          set -euo pipefail
+          NOW="$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
+
+          curl --silent --show-error --fail \
+            --url "smtp://smtp-relay.brevo.com:587" \
+            --ssl-reqd \
+            --mail-from "$BREVO_KEEPALIVE_FROM" \
+            --mail-rcpt "$BREVO_KEEPALIVE_TO" \
+            --user "$BREVO_SMTP_LOGIN:$BREVO_SMTP_KEY" \
+            --upload-file - <<EOF
+          From: $BREVO_KEEPALIVE_FROM
+          To: $BREVO_KEEPALIVE_TO
+          Subject: free-custom-email keepalive - $NOW
+          Date: $NOW
+
+          Automated keepalive email from the free-custom-email project's GitHub Actions workflow. It exists only to keep the Brevo SMTP key active (Brevo expires SMTP keys after 90 days of inactivity). No action needed.
+          EOF
+
+          echo "Keepalive email sent to $BREVO_KEEPALIVE_TO at $NOW."
